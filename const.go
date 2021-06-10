@@ -2,6 +2,7 @@ package main
 
 const (
 	defaultName           string = "openshift-cluster-backup"
+	hostConfigDir         string = "/etc/kubernetes"
 	staticResources       string = "/etc/kubernetes/manifests"
 	snapshotPrefix        string = "snapshot"
 	staticResourcesPrefix string = "static_kuberesources"

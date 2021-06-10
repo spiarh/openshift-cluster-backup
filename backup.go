@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -16,10 +17,11 @@ import (
 )
 
 type etcdEnvVars struct {
-	endpoints []string
-	CAcert    string
-	cert      string
-	key       string
+	endpoints        []string
+	selectedEndpoint string
+	CAcert           string
+	cert             string
+	key              string
 }
 
 func readEtcdEnvVariableFromFile(l *zap.Logger, filepath string) (*etcdEnvVars, error) {
@@ -31,6 +33,16 @@ func readEtcdEnvVariableFromFile(l *zap.Logger, filepath string) (*etcdEnvVars, 
 	if err != nil {
 		return nil, errors.Wrapf(err, fmt.Sprintf("unable to open file: %s", filepath))
 	}
+
+	// snapshot must be requested to only one selected node, so we use
+	// one existing variable to build the selected endpoint.
+	// The variable are built like: NODE_my_hostname_with_underscore_ETCD_URL_HOST="172.10.1.138"
+	hostname, err := os.Hostname()
+	if err != nil {
+		return nil, err
+	}
+	hostname = strings.ReplaceAll(hostname, "-", "_")
+	etcdURLHostKey := "NODE_" + hostname + "_ETCD_URL_HOST"
 
 	defer file.Close()
 
@@ -53,6 +65,8 @@ func readEtcdEnvVariableFromFile(l *zap.Logger, filepath string) (*etcdEnvVars, 
 		case etcdEndpointsKey:
 			// http://host:2379,http://host2:2379
 			etcdEnvVars.endpoints = strings.Split(lineSplit[1], ",")
+		case etcdURLHostKey:
+			etcdEnvVars.selectedEndpoint = "https://" + lineSplit[1] + ":2379"
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -92,10 +106,10 @@ func generateTLSConfig(etcdEnvVars *etcdEnvVars) (*tls.Config, error) {
 
 func (b *backuper) newEtcdV3Config(etcdEnvVars *etcdEnvVars) (clientv3.Config, error) {
 	b.logger.Debug("create etcd client configuration")
+
 	etcdV3Config := clientv3.Config{
 		DialTimeout: b.etcdDialTimeout,
-		// TODO: Check how many host to provide
-		Endpoints: etcdEnvVars.endpoints,
+		Endpoints:   []string{etcdEnvVars.selectedEndpoint},
 	}
 
 	TLSConfig, err := generateTLSConfig(etcdEnvVars)
@@ -144,6 +158,16 @@ func (b *backuper) backup(ctx context.Context, etcdEnvFile, etcdDialTimeout stri
 	etcdEnvVars, err := readEtcdEnvVariableFromFile(b.logger, etcdEnvFile)
 	if err != nil {
 		return err
+	}
+
+	// The path to the certificate and keys does not always
+	// exist at the host level, in this case we need a symlink.
+	// actual:   /etc/kubernetes/static-pod-resources/etcd-certs/secrets/etcd-all-peer/master-1.crt
+	// expected: /etc/kubernetes/static-pod-certs/secrets/etcd-all-peer/master-1.crt
+	if _, err := os.Stat(etcdEnvVars.cert); os.IsNotExist(err) {
+		os.Symlink(
+			path.Join(hostConfigDir, "static-pod-resources/etcd-certs"),
+			path.Join(hostConfigDir, "static-pod-certs"))
 	}
 
 	etcdV3Config, err := b.newEtcdV3Config(etcdEnvVars)
