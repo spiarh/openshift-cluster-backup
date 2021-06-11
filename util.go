@@ -10,6 +10,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+
+	"github.com/pkg/errors"
 )
 
 func getEnvVar(name string) (string, error) {
@@ -23,7 +25,7 @@ func getEnvVar(name string) (string, error) {
 func createTempDir(pattern string) (string, error) {
 	dir, err := ioutil.TempDir("", pattern)
 	if err != nil {
-		return "", err
+		return "", errors.Wrapf(err, "temporary backup dir creation failed")
 	}
 
 	return dir, nil
@@ -36,13 +38,11 @@ func tarDir(srcDir, dstFile string) error {
 	}
 	defer src.Close()
 
-	// get list of files
 	files, err := src.Readdir(0)
 	if err != nil {
 		return err
 	}
 
-	// create tar file
 	tarfile, err := os.Create(dstFile)
 	if err != nil {
 		return err
@@ -65,7 +65,6 @@ func tarDir(srcDir, dstFile string) error {
 		}
 		defer file.Close()
 
-		// prepare the tar header
 		header := new(tar.Header)
 		header.Name = file.Name()
 		header.Size = fileInfo.Size()

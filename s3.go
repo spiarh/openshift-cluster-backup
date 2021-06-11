@@ -61,22 +61,22 @@ func (b *backuper) ensureBucket() error {
 	svc := s3.New(b.s3Session)
 	_, err := svc.GetBucketEncryption(&s3.GetBucketEncryptionInput{Bucket: &b.s3Config.bucket})
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "bucket does not exist or incorrectly configured")
 	}
 
 	return nil
 }
 
 func (b *backuper) uploadS3() error {
-	b.logger.Info("upload file to s3",
+	task := "upload file to s3"
+	b.logger.Info(task,
 		zap.String("path", b.backupFile),
-		zap.String("bucket", b.s3Config.bucket))
+		zap.String("bucket", b.s3Config.bucket),
+		zap.String("status", "running"))
 
 	backupArchive, err := os.Open(b.backupFile)
 	if err != nil {
-		b.logger.Error("open file failed",
-			zap.String("path", b.backupFile))
-		return err
+		return errors.Wrapf(err, "open file failed")
 	}
 
 	defer backupArchive.Close()
@@ -88,14 +88,10 @@ func (b *backuper) uploadS3() error {
 		Body:   backupArchive,
 	})
 	if err != nil {
-		b.logger.Error("upload to bucket failed",
-			zap.String("path", b.backupFile),
-			zap.String("bucket", b.s3Config.bucket),
-		)
-		return err
+		return errors.Wrapf(err, "upload to bucket failed")
 	}
 
-	b.logger.Info("upload file to s3 finished", zap.String("status", "success"))
+	b.logger.Info(task, zap.String("status", "success"))
 
 	return nil
 }

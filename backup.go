@@ -151,8 +151,8 @@ func (b *backuper) createBackupArchive() error {
 	return tarDir(b.tmpDir, b.backupFile)
 }
 
-func (b *backuper) backup(ctx context.Context, etcdEnvFile, etcdDialTimeout string) error {
-	b.logger.Info("backup openshift cluster components")
+func (b *backuper) backupComponents(ctx context.Context, etcdEnvFile, etcdDialTimeout string) error {
+	b.logger.Info("backup local cluster components")
 
 	// etcd
 	etcdEnvVars, err := readEtcdEnvVariableFromFile(b.logger, etcdEnvFile)
@@ -189,7 +189,7 @@ func (b *backuper) backup(ctx context.Context, etcdEnvFile, etcdDialTimeout stri
 		return errors.Wrapf(err, "create final backup archive failed")
 	}
 
-	b.logger.Info("backup openshift cluster components finished",
+	b.logger.Info("backup local cluster components finished",
 		zap.String("status", "success"))
 
 	return nil

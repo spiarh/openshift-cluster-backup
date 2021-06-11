@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"path"
 	"time"
 
@@ -66,15 +67,18 @@ func newBackuper(l *zap.Logger, tmpDir, etcdEnvFile, etcdDialTimeout, etcdBackup
 }
 
 func main() {
+	var err error
 	var (
 		etcdEnvFile       string
 		etcdDialTimeout   string
 		etcdBackupTimeout string
+		keepLocalBackup   bool
 	)
 
 	flag.StringVar(&etcdEnvFile, "etcd-env-file", defaultEtcdEnvFile, "The path to the etcd environment variable path.")
 	flag.StringVar(&etcdDialTimeout, "etcd-dial-timeout", defaultEtcdDialTimeout, "The timeout for failing to establish a connection to etcd")
 	flag.StringVar(&etcdBackupTimeout, "etcd-backup-timeout", defaultEtcdBackupTimeout, "The timeout for backing up etcd")
+	flag.BoolVar(&keepLocalBackup, "keepLocalBackup", defaultKeepLocalBackup, "Keep the local backup once uploaded")
 	flag.Parse()
 
 	// Logging
@@ -83,38 +87,48 @@ func main() {
 		panic(fmt.Sprintf("create logger failed: %v", err))
 	}
 	logger = logger.With(zap.String("name", defaultName))
+	logger.Info("backup",
+		zap.String("status", "running"))
 	defer logger.Sync()
 
+	defer func() {
+		if err != nil {
+			logger.Fatal("backup",
+				zap.String("status", "failed"),
+				zap.Error(err))
+		} else {
+			logger.Info("backup",
+				zap.String("status", "success"))
+		}
+	}()
+
+	err = backup(logger, etcdEnvFile, etcdDialTimeout, etcdBackupTimeout, keepLocalBackup)
+}
+
+func backup(logger *zap.Logger, etcdEnvFile, etcdDialTimeout, etcdBackupTimeout string, keepLocalBackup bool) error {
 	// Create backup configuration.
-	// TODO: add deletion
 	tmpDir, err := createTempDir(defaultName)
 	if err != nil {
-		logger.Fatal("temporary backup dir creation failed", zap.Error(err))
+		return err
+	}
+	if !keepLocalBackup {
+		defer os.RemoveAll(tmpDir)
 	}
 
 	backuper, err := newBackuper(logger, tmpDir, etcdEnvFile, etcdDialTimeout, etcdBackupTimeout)
 	if err != nil {
-		logger.Fatal("create backuper failed", zap.Error(err))
+		return errors.Wrapf(err, "create backuper failed")
 	}
 
-	logger.Debug("temporary backup directory", zap.String("path", tmpDir))
-
 	if err := backuper.ensureBucket(); err != nil {
-		logger.Fatal("bucket does not exist or incorrectly configured", zap.Error(err))
+		return err
 	}
 
 	ctx, ctxCancel := context.WithTimeout(context.Background(), backuper.etcdBackupTimeout)
 	defer ctxCancel()
-	if err := backuper.backup(ctx, etcdEnvFile, etcdDialTimeout); err != nil {
-		logger.Fatal("backup finished",
-			zap.String("status", "failed"),
-			zap.Error(err))
+	if err := backuper.backupComponents(ctx, etcdEnvFile, etcdDialTimeout); err != nil {
+		return err
 	}
 
-	if err := backuper.uploadS3(); err != nil {
-		logger.Fatal("upload finished",
-			zap.String("status", "failed"),
-			zap.Error(err))
-		logger.Fatal("", zap.Error(err))
-	}
+	return backuper.uploadS3()
 }

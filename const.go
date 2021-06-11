@@ -12,6 +12,7 @@ const (
 	defaultEtcdEnvFile       string = "/etc/kubernetes/static-pod-resources/etcd-certs/configmaps/etcd-scripts/etcd.env"
 	defaultEtcdDialTimeout   string = "10s"
 	defaultEtcdBackupTimeout string = "60s"
+	defaultKeepLocalBackup   bool   = false
 
 	etcdEndpointsKey string = "ETCDCTL_ENDPOINTS"
 	etcdCACertKey    string = "ETCDCTL_CACERT"
