@@ -5,15 +5,18 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io/ioutil"
 	"os"
-	"path"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/pkg/errors"
-	"go.etcd.io/etcd/clientv3"
-	"go.etcd.io/etcd/clientv3/snapshot"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/snapshot"
 	"go.etcd.io/etcd/pkg/transport"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 type etcdEnvVars struct {
@@ -24,28 +27,31 @@ type etcdEnvVars struct {
 	key              string
 }
 
-func readEtcdEnvVariableFromFile(l *zap.Logger, filepath string) (*etcdEnvVars, error) {
-	l.Info("read environment variables from file",
-		zap.String("path", filepath))
+func readEtcdEnvVariableFromFile(logger *zap.Logger, getHostname func() (string, error), path string) (*etcdEnvVars, error) {
+	logger.Info("read environment variables from file",
+		zap.String("path", path))
 
-	etcdEnvVars := etcdEnvVars{}
-	file, err := os.Open(filepath)
+	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
-		return nil, errors.Wrapf(err, fmt.Sprintf("unable to open file: %s", filepath))
+		return nil, errors.Wrapf(err, fmt.Sprintf("unable to open file: %s", path))
 	}
 
 	// snapshot must be requested to only one selected node, so we use
 	// one existing variable to build the selected endpoint.
 	// The variable are built like: NODE_my_hostname_with_underscore_ETCD_URL_HOST="172.10.1.138"
-	hostname, err := os.Hostname()
+	hostname, err := getHostname()
 	if err != nil {
 		return nil, err
 	}
 	hostname = strings.ReplaceAll(hostname, "-", "_")
-	etcdURLHostKey := "NODE_" + hostname + "_ETCD_URL_HOST"
 
-	defer file.Close()
+	etcdURLHostKeyRegex := "NODE_" + hostname + ".*" + "_ETCD_URL_HOST"
 
+	defer deferWithErrLog(
+		logger, func() error { return file.Close() },
+		"closing etcd environment variables from file failed")
+
+	etcdEnvVars := etcdEnvVars{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -55,18 +61,24 @@ func readEtcdEnvVariableFromFile(l *zap.Logger, filepath string) (*etcdEnvVars, 
 		line = strings.TrimSuffix(line, "\"")
 		lineSplit := strings.Split(line, "=\"")
 
-		switch lineSplit[0] {
+		key := lineSplit[0]
+		value := lineSplit[1]
+
+		switch key {
 		case etcdCertKey:
-			etcdEnvVars.cert = lineSplit[1]
+			etcdEnvVars.cert = value
 		case etcdKeyKey:
-			etcdEnvVars.key = lineSplit[1]
+			etcdEnvVars.key = value
 		case etcdCACertKey:
-			etcdEnvVars.CAcert = lineSplit[1]
+			etcdEnvVars.CAcert = value
 		case etcdEndpointsKey:
 			// http://host:2379,http://host2:2379
-			etcdEnvVars.endpoints = strings.Split(lineSplit[1], ",")
-		case etcdURLHostKey:
-			etcdEnvVars.selectedEndpoint = "https://" + lineSplit[1] + ":2379"
+			etcdEnvVars.endpoints = strings.Split(value, ",")
+		}
+
+		re := regexp.MustCompile(etcdURLHostKeyRegex)
+		if re.Match([]byte(key)) {
+			etcdEnvVars.selectedEndpoint = "https://" + value + ":2379"
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -80,6 +92,8 @@ func readEtcdEnvVariableFromFile(l *zap.Logger, filepath string) (*etcdEnvVars, 
 		return nil, fmt.Errorf("keynot found in env var file")
 	case etcdEnvVars.CAcert == "":
 		return nil, fmt.Errorf("CA certificate not found in env var file")
+	case etcdEnvVars.selectedEndpoint == "":
+		return nil, fmt.Errorf("current host endpoint not found in env var file")
 	case etcdEnvVars.endpoints == nil:
 		return nil, fmt.Errorf("endpoints not found in env var file")
 	}
@@ -123,24 +137,69 @@ func (b *backuper) newEtcdV3Config(etcdEnvVars *etcdEnvVars) (clientv3.Config, e
 
 func (b *backuper) snapshotEtcd(ctx context.Context, etcdV3Config clientv3.Config) error {
 	b.logger.Info("snaphot etcd")
-	etcdManager := snapshot.NewV3(b.logger)
-	if err := etcdManager.Save(ctx, etcdV3Config, b.snapshotFileBackup); err != nil {
+
+	err := snapshot.Save(ctx, b.logger, etcdV3Config, b.snapshotFileBackup)
+	if err != nil {
 		return err
 	}
 
-	return createSHA256HashFileFromFile(b.snapshotFileBackup)
+	return b.createSHA256HashFileFromFile(b.snapshotFileBackup)
 }
 
 func (b *backuper) backupStaticResources() error {
-	b.logger.Info("back up Kube Static Resources",
-		zap.String("source", staticResources),
-		zap.String("archive", b.staticResourcesBackup))
+	pods := []string{"kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd"}
+	rscDirs := make([]string, 0, len(pods))
 
-	if err := tarDir(staticResources, b.staticResourcesBackup); err != nil {
+	for _, pod := range pods {
+		dir, err := getPodResourceDir(pod)
+		if err != nil {
+			return err
+		}
+		rscDirs = append(rscDirs, dir)
+
+		b.logger.Info("back up kube static resources",
+			zap.String("source", dir),
+			zap.String("archive", b.staticResourcesBackup))
+	}
+
+	if err := b.tarDir(b.staticResourcesBackup, hostConfigDir, rscDirs...); err != nil {
 		return err
 	}
 
-	return createSHA256HashFileFromFile(b.staticResourcesBackup)
+	return b.createSHA256HashFileFromFile(b.staticResourcesBackup)
+}
+
+func getPodResourceDir(pod string) (string, error) {
+	type podSpec struct {
+		Spec struct {
+			Volumes []struct {
+				Name     string `yaml:"name"`
+				HostPath struct {
+					Path string `yaml:"path"`
+				} `yaml:"hostPath"`
+			} `yaml:"volumes"`
+		} `yaml:"spec"`
+	}
+
+	spec := podSpec{}
+	staticPodPath := filepath.Join(manifestsDir, (pod + "-pod.yaml"))
+
+	file, err := ioutil.ReadFile(filepath.Clean(staticPodPath))
+	if err != nil {
+		return "", err
+	}
+
+	if err := yaml.Unmarshal(file, &spec); err != nil {
+		return "", err
+	}
+
+	for _, vol := range spec.Spec.Volumes {
+		if vol.Name == "resource-dir" {
+			return vol.HostPath.Path, nil
+		}
+	}
+
+	return "", fmt.Errorf("pod resource directory not found: %s", pod)
 }
 
 func (b *backuper) createBackupArchive() error {
@@ -148,14 +207,15 @@ func (b *backuper) createBackupArchive() error {
 		zap.String("source", b.tmpDir),
 		zap.String("archive", b.backupFile))
 
-	return tarDir(b.tmpDir, b.backupFile)
+	return b.tarDir(b.backupFile, "", b.tmpDir)
 }
 
 func (b *backuper) backupComponents(ctx context.Context, etcdEnvFile, etcdDialTimeout string) error {
-	b.logger.Info("backup local cluster components")
+	b.logger.Info("backup local cluster components",
+		zap.String("status", "running"))
 
 	// etcd
-	etcdEnvVars, err := readEtcdEnvVariableFromFile(b.logger, etcdEnvFile)
+	etcdEnvVars, err := readEtcdEnvVariableFromFile(b.logger, os.Hostname, etcdEnvFile)
 	if err != nil {
 		return err
 	}
@@ -164,10 +224,13 @@ func (b *backuper) backupComponents(ctx context.Context, etcdEnvFile, etcdDialTi
 	// exist at the host level, in this case we need a symlink.
 	// actual:   /etc/kubernetes/static-pod-resources/etcd-certs/secrets/etcd-all-peer/master-1.crt
 	// expected: /etc/kubernetes/static-pod-certs/secrets/etcd-all-peer/master-1.crt
-	if _, err := os.Stat(etcdEnvVars.cert); os.IsNotExist(err) {
-		os.Symlink(
-			path.Join(hostConfigDir, "static-pod-resources/etcd-certs"),
-			path.Join(hostConfigDir, "static-pod-certs"))
+	if _, err := os.Stat(etcdEnvVars.cert); errors.Is(err, os.ErrNotExist) {
+		err := os.Symlink(
+			filepath.Join(hostConfigDir, "static-pod-resources/etcd-certs"),
+			filepath.Join(hostConfigDir, "static-pod-certs"))
+		if err != nil {
+			return errors.Wrapf(err, "creating symlink for etcd cert failed")
+		}
 	}
 
 	etcdV3Config, err := b.newEtcdV3Config(etcdEnvVars)
@@ -189,7 +252,7 @@ func (b *backuper) backupComponents(ctx context.Context, etcdEnvFile, etcdDialTi
 		return errors.Wrapf(err, "create final backup archive failed")
 	}
 
-	b.logger.Info("backup local cluster components finished",
+	b.logger.Info("backup local cluster components",
 		zap.String("status", "success"))
 
 	return nil

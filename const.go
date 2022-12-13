@@ -3,7 +3,8 @@ package main
 const (
 	defaultName           string = "openshift-cluster-backup"
 	hostConfigDir         string = "/etc/kubernetes"
-	staticResources       string = "/etc/kubernetes/manifests"
+	kubeconfigPath        string = "/etc/kubernetes/kubeconfig"
+	manifestsDir          string = "/etc/kubernetes/manifests"
 	snapshotPrefix        string = "snapshot"
 	staticResourcesPrefix string = "static_kuberesources"
 )
@@ -21,8 +22,9 @@ const (
 )
 
 const (
-	accessKeyIDEnvKey     string = "AWS_ACCESS_KEY_ID"
+	accessKeyIDEnvKey string = "AWS_ACCESS_KEY_ID"
+	// #nosec G101 -- not an actual secret, just the env var name
 	secretAccessKeyEnvKey string = "AWS_SECRET_ACCESS_KEY"
-	regionEnvKey          string = "AWS_REGION"
-	bucketEnvKey          string = "AWS_BUCKET"
+	regionEnvKey          string = "BUCKET_REGION"
+	bucketEnvKey          string = "BUCKET_NAME"
 )

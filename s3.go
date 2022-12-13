@@ -35,23 +35,31 @@ func newS3Session(l *zap.Logger, region string) (*session.Session, error) {
 }
 
 func newS3Config() (*s3Config, error) {
-	var err error
-	var config s3Config = s3Config{}
-
-	if config.accessKeyID, err = getEnvVar(accessKeyIDEnvKey); err != nil {
+	accessKeyID, err := getEnvVar(accessKeyIDEnvKey)
+	if err != nil {
 		return nil, err
 	}
-	if config.secretAccessKey, err = getEnvVar(secretAccessKeyEnvKey); err != nil {
-		return nil, err
-	}
-	if config.region, err = getEnvVar(regionEnvKey); err != nil {
-		return nil, err
-	}
-	if config.bucket, err = getEnvVar(bucketEnvKey); err != nil {
+	secretAccessKey, err := getEnvVar(secretAccessKeyEnvKey)
+	if err != nil {
 		return nil, err
 	}
 
-	return &config, nil
+	region, err := getEnvVar(regionEnvKey)
+	if err != nil {
+		return nil, err
+	}
+
+	bucket, err := getEnvVar(bucketEnvKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &s3Config{
+		accessKeyID:     accessKeyID,
+		secretAccessKey: secretAccessKey,
+		region:          region,
+		bucket:          bucket,
+	}, nil
 }
 
 func (b *backuper) ensureBucket() error {
@@ -79,7 +87,9 @@ func (b *backuper) uploadS3() error {
 		return errors.Wrapf(err, "open file failed")
 	}
 
-	defer backupArchive.Close()
+	defer deferWithErrLog(
+		b.logger, func() error { return backupArchive.Close() },
+		"closing backup archive failed")
 
 	uploader := s3manager.NewUploader(b.s3Session)
 	_, err = uploader.Upload(&s3manager.UploadInput{

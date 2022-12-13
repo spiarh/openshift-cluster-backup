@@ -1,0 +1,33 @@
+allowHostDirVolumePlugin: true
+allowHostIPC: false
+allowHostNetwork: true
+allowHostPID: false
+allowHostPorts: false
+allowPrivilegeEscalation: true
+allowPrivilegedContainer: false
+apiVersion: security.openshift.io/v1
+fsGroup:
+  type: MustRunAs
+kind: SecurityContextConstraints
+metadata:
+  name: openshift-cluster-backup
+readOnlyRootFilesystem: false
+requiredDropCapabilities:
+- KILL
+- MKNOD
+- SETUID
+- SETGID
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+users:
+- system:serviceaccount:backup:openshift-cluster-backup
+volumes:
+- hostPath
+- downwardAPI
+- emptyDir
+- projected
+- secret

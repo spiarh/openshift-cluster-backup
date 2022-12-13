@@ -1,7 +1,7 @@
 REPO_ROOT         := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 VERSION				:= $(shell cat $(REPO_ROOT)/VERSION)
 EFFECTIVE_VERSION	:= $(VERSION)-$(shell git rev-parse HEAD)
-FROM_IMAGE_BUILDER		:= docker.io/library/golang:1.16
+FROM_IMAGE_BUILDER		:= docker.io/library/golang:1.19
 FROM_IMAGE		:= registry.access.redhat.com/ubi8/ubi-minimal:8.4
 IMAGE 				:= quay.io/lcavajan/openshift-cluster-backup:$(EFFECTIVE_VERSION)
 IMAGE_LATEST	:= quay.io/lcavajan/openshift-cluster-backup:latest
@@ -14,7 +14,7 @@ build:
 build-image:
 	buildah bud \
 		--build-arg FROM_IMAGE_BUILDER=$(FROM_IMAGE_BUILDER) \
-        --build-arg FROM_IMAGE=$(FROM_IMAGE) \
+    --build-arg FROM_IMAGE=$(FROM_IMAGE) \
 		-t $(IMAGE) -t $(IMAGE_LATEST) .
 
 .PHONY: push-image

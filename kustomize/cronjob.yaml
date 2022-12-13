@@ -1,0 +1,42 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openshift-cluster-backup
+spec:
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 7
+  successfulJobsHistoryLimit: 7
+  schedule: "30 3 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          activeDeadlineSeconds: 300
+          automountServiceAccountToken: false
+          nodeSelector:
+            node-role.kubernetes.io/master: ""
+          tolerations:
+          - effect: NoSchedule
+            operator: Exists
+          containers:
+          - image: openshift-cluster-backup
+            imagePullPolicy: IfNotPresent
+            name: openshift-cluster-backup
+            resources: {}
+            volumeMounts:
+            - mountPath: /etc/kubernetes/
+              name: kubernetes-dir
+              readOnly: true
+            envFrom:
+            - secretRef:
+                name: aws-credentials
+            securityContext:
+                runAsUser: 0
+          hostNetwork: true
+          restartPolicy: OnFailure
+          volumes:
+          - hostPath:
+              path: /etc/kubernetes
+              type: Directory
+            name: kubernetes-dir

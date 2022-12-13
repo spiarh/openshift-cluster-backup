@@ -1,0 +1,24 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: backup
+
+commonLabels:
+  app: openshift-cluster-backup
+
+images:
+- name: openshift-cluster-backup
+  newName: quay.io/lcavajan/openshift-cluster-backup
+  newTag: v0.1.0-72e1d4c4591a514495558f4842f59f634f1d563d
+
+secretGenerator:
+- name: aws-credentials
+  envs:
+  - ./secret
+
+resources:
+- ./cronjob.yaml
+- ./namespace.yaml
+- ./serviceaccount.yaml
+- ./scc.yaml

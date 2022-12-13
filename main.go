@@ -5,7 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"time"
 
 	"go.uber.org/zap"
@@ -58,9 +58,9 @@ func newBackuper(l *zap.Logger, tmpDir, etcdEnvFile, etcdDialTimeout, etcdBackup
 		etcdEnvFile:           etcdEnvFile,
 		etcdDialTimeout:       etcdDialTimeoutDuration,
 		etcdBackupTimeout:     etcdBackupTimeoutDuration,
-		snapshotFileBackup:    path.Join(tmpDir, fmt.Sprintf("%s_%s.db", snapshotPrefix, now)),
-		staticResourcesBackup: path.Join(tmpDir, fmt.Sprintf("%s_%s.tgz", staticResourcesPrefix, now)),
-		backupFile:            path.Join(tmpDir, fmt.Sprintf("%s_%s.tgz", defaultName, now)),
+		snapshotFileBackup:    filepath.Join(tmpDir, fmt.Sprintf("%s_%s.db", snapshotPrefix, now)),
+		staticResourcesBackup: filepath.Join(tmpDir, fmt.Sprintf("%s_%s.tar.gz", staticResourcesPrefix, now)),
+		backupFile:            filepath.Join(tmpDir, fmt.Sprintf("%s_%s.tar.gz", defaultName, now)),
 		s3Session:             s3Session,
 		s3Config:              s3Config,
 	}, nil
@@ -82,14 +82,13 @@ func main() {
 	flag.Parse()
 
 	// Logging
-	logger, err := zap.NewProduction()
+	logger, err := createLogger(kubeconfigPath)
 	if err != nil {
 		panic(fmt.Sprintf("create logger failed: %v", err))
 	}
-	logger = logger.With(zap.String("name", defaultName))
-	logger.Info("backup",
-		zap.String("status", "running"))
-	defer logger.Sync()
+	defer func() {
+		err = logger.Sync()
+	}()
 
 	defer func() {
 		if err != nil {
@@ -102,7 +101,32 @@ func main() {
 		}
 	}()
 
+	logger.Info("backup", zap.String("status", "running"))
+
 	err = backup(logger, etcdEnvFile, etcdDialTimeout, etcdBackupTimeout, keepLocalBackup)
+}
+
+func createLogger(kubeconfig string) (*zap.Logger, error) {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := createID()
+	if err != nil {
+		return nil, err
+	}
+
+	api, err := getAPIHostname(kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return logger.With(
+		zap.String("name", defaultName),
+		zap.String("id", id),
+		zap.String("api", api),
+	), nil
 }
 
 func backup(logger *zap.Logger, etcdEnvFile, etcdDialTimeout, etcdBackupTimeout string, keepLocalBackup bool) error {
